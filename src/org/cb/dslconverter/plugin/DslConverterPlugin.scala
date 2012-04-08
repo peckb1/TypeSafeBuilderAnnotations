@@ -6,8 +6,8 @@ import scala.tools.nsc.transform.Transform
 import scala.tools.nsc.Global
 
 class DslConverterPlugin(val global: Global) extends Plugin {
-  import global._
-
+  import global._  
+  
   private val DSL_CONVERTER_CLASS_NAME: String = "org.cb.dslconverter.annotations.DslConvertable"
 
   // what is the name of our plugin
@@ -16,7 +16,7 @@ class DslConverterPlugin(val global: Global) extends Plugin {
   val description = "generates code to allow for a dsl style syntax to be used with common case classes"
   // what are the components in our plugin
   val components = List[PluginComponent](DslConverterComponent)
-
+  
   // keep track of our classes
   val annotatedClasses = collection.mutable.HashMap[global.Symbol, global.ClassDef]()
 
@@ -58,19 +58,18 @@ class DslConverterPlugin(val global: Global) extends Plugin {
             println(md.symbol.tpe)
             println(annotatedClasses)
             println()
-            //            println(md)
+//            println(md)
             md
           }
           // if we don't care about it, just return the default
           case _ => tree
         }
-
+        
         super.transform(newTree)
       }
     }
   }
-
-  def annotatedWithDslConverter(sym: Symbol) = {
-    sym.annotations.exists(_.atp.typeSymbol == DSL_CONVERTER_CLASS_NAME)
-  }
+  
+  def annotatedWithDslConverter(sym: Symbol) = sym.isCaseClass && sym.annotations.exists(_.atp.toLongString == DSL_CONVERTER_CLASS_NAME)
+  
 }
