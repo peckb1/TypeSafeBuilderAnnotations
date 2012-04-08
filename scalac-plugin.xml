@@ -1,0 +1,4 @@
+<plugin>
+  <name>DslCOnverter</name>
+  <classname>org.cb.dslconverter.plugin.DslConverterPlugin</classname>
+</plugin>

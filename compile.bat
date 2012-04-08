@@ -1,0 +1,1 @@
+scalac -cp dsl-converter-plugin.jar -Xplugin:dsl-converter-plugin.jar examples\DslConverterExample.scala
