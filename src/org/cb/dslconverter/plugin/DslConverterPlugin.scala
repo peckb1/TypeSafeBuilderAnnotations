@@ -6,6 +6,8 @@ import scala.tools.nsc.transform.Transform
 import scala.tools.nsc.Global
 
 class DslConverterPlugin(val global: Global) extends Plugin {
+  import global._
+
   private val DSL_CONVERTER_CLASS_NAME: String = "org.cb.dslconverter.annotations.DslConvertable"
 
   // what is the name of our plugin
@@ -14,7 +16,7 @@ class DslConverterPlugin(val global: Global) extends Plugin {
   val description = "generates code to allow for a dsl style syntax to be used with common case classes"
   // what are the components in our plugin
   val components = List[PluginComponent](DslConverterComponent)
-  
+
   // keep track of our classes
   val annotatedClasses = collection.mutable.HashMap[global.Symbol, global.ClassDef]()
 
@@ -43,34 +45,32 @@ class DslConverterPlugin(val global: Global) extends Plugin {
         // lets go through the tree
         val newTree = tree match {
 
-          // the case of a Class Definition (global.ClassDef)              // but only check if it's annotated with what we want
-          case cd @ global.ClassDef(modifiers, className, params, typeDef) if(annotatedWithDslConverter(cd)) => {
+          // the case of a Class Definition (global.ClassDef), but only check if it's annotated with what we want
+          case cd @ ClassDef(modifiers, className, params, typeDef) if annotatedWithDslConverter(cd.symbol) => {
             // safe off the case class, when we get to its module definition below we need to alter the code
             annotatedClasses += (cd.symbol -> cd)
             // return the original
             cd
           }
-          // The case for a Module Definition (global.ModuleDef)
-          case md @ global.ModuleDef(mods, name, impl) => {
+          // The case for a Module Definition (global.ModuleDef), but once again, only if the companion class was annotated 
+          case md @ ModuleDef(mods, name, impl) if annotatedWithDslConverter(md.symbol.companionClass) => {
             println("-----------------------")
             println(md.symbol.tpe)
             println(annotatedClasses)
             println()
-//            println(md)
+            //            println(md)
             md
           }
           // if we don't care about it, just return the default
           case _ => tree
         }
-        
+
         super.transform(newTree)
       }
     }
   }
-  
-  private def annotatedWithDslConverter(cd: global.ClassDef): Boolean = {
-    cd.symbol.annotations.exists(anno => {
-      anno.atp.toLongString == DSL_CONVERTER_CLASS_NAME
-    })
+
+  def annotatedWithDslConverter(sym: Symbol) = {
+    sym.annotations.exists(_.atp.typeSymbol == DSL_CONVERTER_CLASS_NAME)
   }
 }
