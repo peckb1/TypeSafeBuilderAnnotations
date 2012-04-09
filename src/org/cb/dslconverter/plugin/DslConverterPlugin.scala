@@ -4,13 +4,16 @@ import scala.tools.nsc.plugins.Plugin
 import scala.tools.nsc.plugins.PluginComponent
 import scala.tools.nsc.transform.Transform
 import scala.tools.nsc.Global
+import scala.tools.nsc.symtab.Flags._
+import java.util.concurrent.atomic.AtomicLong
 
 class DslConverterPlugin(val global: Global) extends Plugin {
   // import the globals classes - since we use them often
   import global._
+  import definitions._
 
   // The name of the annotation class
-  private val DSL_CONVERTER_CLASS_NAME: String = "org.cb.dslconverter.annotations.DslConvertable"
+  val DSL_CONVERTER_CLASS_NAME: String = "org.cb.dslconverter.annotations.DslConvertable"
 
   // what is the name of our plugin
   val name = "dsl-converter-gen"
@@ -33,19 +36,20 @@ class DslConverterPlugin(val global: Global) extends Plugin {
    */
   private object DslConverterComponent extends PluginComponent with Transform {
 
-    // Stil magic to me
+    // Still magic to me
     val global: DslConverterPlugin.this.global.type = DslConverterPlugin.this.global
+
     // when should this PluginComponent be ran
     val runsAfter = List[String]("typer")
 
     // What name should we give the phase for this plugin
     val phaseName = DslConverterPlugin.this.name
 
-    // In the case of also exending transform, we need a Transformer Class
+    // In the case of also extending transform, we need a Transformer Class
     def newTransformer(unit: global.CompilationUnit) = DslConverterTransformer
 
     // Implementation of the Transformer class
-    object DslConverterTransformer extends global.Transformer {
+    object DslConverterTransformer extends Transformer {
 
       // main method for transforming the tree
       override def transform(tree: global.Tree) = {
@@ -54,47 +58,80 @@ class DslConverterPlugin(val global: Global) extends Plugin {
         val newTree = tree match {
 
           // the case of a Class Definition (global.ClassDef)
-          case cd @ ClassDef(modifiers, className, params, impl) => {cd}
-          case pd @ PackageDef(packageName, impl) => {
-            
-            // get the classes that are annotated with our @DslConvertable - and map them to the correct type (ClassDef)
-            val classesToMakeBuildersFor: List[ClassDef] = impl.filter( c => annotatedWithDslConverter(c.symbol) ).map( c => c.asInstanceOf[ClassDef])
-            
-            // get the builder classes created from our annotated classes
-            val builderclasses: List[ClassDef] = classesToMakeBuildersFor.map( (c:ClassDef) => {
-              // pull out the members we are about from the class
-              val targetMembers = c.impl.body.filter(shouldMemberBeIncluded_?)
-              // create the builder ClassDefs
-              generateBuilderClass(pd.symbol, c.symbol, targetMembers.map(_.symbol)) 
-            }) 
+          case cd @ ClassDef(modifiers, className, params, impl) => { cd }
+          case pd @ PackageDef(packageName, stats) => {
+            // we have a package - lets check for classes that are annotated  
+            val newStats = stats.flatMap {
+              // for each of the annotated classes 
+              case cd @ ClassDef(modifiers, className, tparams, impl) if annotatedWithDslConverter(cd.symbol) => {
+                // add the members to include
+                val targetMembers = cd.impl.body.filter(shouldMemberBeIncluded_?)
+                // create a builder class for it
+                val builderClass = generateBuilderClass(pd.symbol, cd.symbol, targetMembers)
+                // add the builder class to our list of classes
+                cd :: builderClass :: Nil
 
-            pd
+                // XXX - keep until generateBuilderClass is correct
+                cd :: Nil
+              }
+              // if it's not a ClassDef we want, just move on
+              case x => x :: Nil
+            }
+            // add in the new class into the current package
+            treeCopy.PackageDef(pd, packageName, newStats)
           }
-          // The case for a Module Definition (global.ModuleDef), but once again, only if the companion class was annotated 
-          case md @ ModuleDef(mods, name, impl) => {md}
+
+          // The case for a Module Definition (global.ModuleDef) 
+          case md @ ModuleDef(mods, name, impl) => { md }
           // catch the rest
           case _ => tree
         }
 
         super.transform(newTree)
+
       }
     }
   }
-  
+
+  val sequence = new AtomicLong(0)
+
   /**
    * Generates a Builder class as a child of the packageClass, matching the name and types of caseClass
    */
-  def generateBuilderClass(packageClass: Symbol, caseClass: Symbol, caseClassMembers: List[Symbol]): ClassDef = {
+  def generateBuilderClass(packageClass: Symbol, caseClass: Symbol, caseClassMembers: List[Tree]): ClassDef = {
     // create the name
     val caseClassBuilderName: TypeName = caseClass.name.append("Builder").toTypeName
     // create the ClassSymbol for our builder class
-    val caseClassBuilder: ClassSymbol  = packageClass.newClass(packageClass.pos.focus, caseClassBuilderName)
+    val caseClassBuilder: ClassSymbol = packageClass.newClass(packageClass.pos.focus, caseClassBuilderName)
+    // look for the non optional fields
+    val mandatoryFields = caseClassMembers.filter(member => {
+      !(member.asInstanceOf[DefDef]).tpt.toString().contains("Option")
+    })
+    // now that we have the mandatory fields, create types for each of the fields
+    // for example val time: Double becomes the type [HAS_TIME]
+    val builderMandatoryParamTypes: List[Symbol] = {
+      mandatoryFields.map(field => {
+        val fieldName = (field.asInstanceOf[DefDef]).name
+        val param = caseClassBuilder.newTypeParameter(caseClassBuilder.pos.focus, newTypeName("HAS_").append(fieldName.toString().toUpperCase()))
+        param setFlag (DEFERRED | PARAM)
+        param
+      })
+    }
+
+    // Does this add in the types to the new class?
+    caseClassBuilder setInfo polyType(
+      builderMandatoryParamTypes.map(_.tpe.typeSymbol),
+      ClassInfoType(
+        ObjectClass.tpe :: ScalaObjectClass.tpe :: Nil,
+        new Scope,
+        caseClassBuilder))
     
-    println(caseClassMembers)
     
+
+    println(caseClassBuilder.info)
+
     null
   }
-  
 
   /**
    * Check to see if a given Symbol is annotated with our @DslConverter annotation
